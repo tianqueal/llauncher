@@ -1,0 +1,19 @@
+ARG ARCH=amd64
+FROM --platform=linux/${ARCH} python:3.9-slim
+
+# Instalar dependencias
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    zlib1g-dev \
+    libssl-dev \
+    upx \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copiar solo los archivos necesarios para instalar dependencias
+COPY requirements.txt .
+
+# Instalar dependencias de Python
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir pyinstaller
