@@ -210,4 +210,6 @@ pyrightconfig.json
 
 # Custom ignores
 .minecraft
+minecraft_*
+1.21.*.json
 *.log.*
