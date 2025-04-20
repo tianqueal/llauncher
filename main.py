@@ -16,6 +16,8 @@ from datetime import datetime
 MANIFEST_FILE = "1.21.5.json"
 MANIFEST_URL = "https://piston-meta.mojang.com/v1/packages/a0645da8cf4e89da6baaab8e08b7ca64b7f4b0cf/1.21.5.json"
 BASE_DIR = Path("minecraft_1.21.5")
+MANIFEST_DIR = BASE_DIR / "manifest"
+MANIFEST_JSON = MANIFEST_DIR / MANIFEST_FILE
 LIBRARIES_DIR = BASE_DIR / "libraries"
 ASSETS_DIR = BASE_DIR / "assets"
 NATIVES_DIR = BASE_DIR / "natives"
@@ -34,11 +36,9 @@ download_lock = threading.Lock()
 total_downloads = 0
 
 # Crear directorio y archivo de registro
-LOGS_DIR = Path("minecraft_logs")
-LOGS_DIR.mkdir(exist_ok=True)
-log_filename = (
-    LOGS_DIR / f'minecraft_downloader_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
-)
+LOGS_DIR = BASE_DIR / "ll_logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+log_filename = LOGS_DIR / f'll_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 log_file = open(log_filename, "w")
 log_lock = threading.Lock()  # Para evitar conflictos al escribir en el log
 
@@ -162,14 +162,15 @@ def download_minecraft():
 
         # Crear carpetas
         BASE_DIR.mkdir(exist_ok=True)
+        MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
         LIBRARIES_DIR.mkdir(parents=True, exist_ok=True)
         NATIVES_DIR.mkdir(parents=True, exist_ok=True)
         ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
         # Descargar manifest si no existe
-        if not Path(MANIFEST_FILE).exists():
+        if not MANIFEST_JSON.exists():
             log(f"Descargando el archivo manifest desde {MANIFEST_URL}...")
-            if not download_file(MANIFEST_URL, Path(MANIFEST_FILE)):
+            if not download_file(MANIFEST_URL, MANIFEST_JSON):
                 should_exit = True
                 log("Error al descargar el manifest", error=True)
                 return
@@ -178,7 +179,7 @@ def download_minecraft():
 
         # Leer manifest
         try:
-            with open(MANIFEST_FILE, "r") as f:
+            with open(MANIFEST_JSON, "r") as f:
                 manifest = json.load(f)
         except (json.JSONDecodeError, FileNotFoundError) as e:
             should_exit = True
@@ -333,7 +334,7 @@ def launch_minecraft(username):
 
     # Leer manifest para obtener asset_index_id
     try:
-        with open(MANIFEST_FILE, "r") as f:
+        with open(MANIFEST_JSON, "r") as f:
             manifest = json.load(f)
             asset_index_id = manifest.get("assetIndex", {}).get("id", "1.21.5")
     except Exception as e:
@@ -416,7 +417,7 @@ def show_menu():
         print("\nOpciones:")
         print("1. Descargar Minecraft 1.21.5")
         print("2. Iniciar Minecraft")
-        print("3. Eliminar archivos de instalación")
+        print("3. Eliminar archivos de instalación y logs del launcher")
         print("4. Ver registro")
         print("5. Configuración")
         print("6. Salir")
@@ -470,20 +471,17 @@ def show_menu():
 
             elif option == "3":
                 if CLIENT_JAR.exists() or BASE_DIR.exists():
-                    if prompt_yes_no("\n¿Eliminar archivos de instalación?"):
+                    if prompt_yes_no("\n¿Eliminar archivos?"):
                         try:
-                            log("Iniciando limpieza de archivos de instalación")
+                            log("Iniciando limpieza de archivos")
                             remove_directory_recursively(BASE_DIR)
-                            print("\n✅ Archivos de instalación eliminados.")
+                            print("\n✅ Archivos de instalación y logs eliminados.")
                             download_complete = False
-                            if Path(MANIFEST_FILE).exists():
-                                Path(MANIFEST_FILE).unlink()
-                                log(f"Archivo manifest {MANIFEST_FILE} eliminado")
                         except Exception as e:
                             log(f"Error al eliminar archivos: {e}", error=True)
                             print(f"\n❌ Error al eliminar archivos: {e}")
                 else:
-                    print("\n❌ No hay archivos de instalación para eliminar.")
+                    print("\n❌ No hay archivos para eliminar.")
 
             elif option == "4":
                 print("\n" + "=" * 60)
