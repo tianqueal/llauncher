@@ -3,7 +3,7 @@
 # Crear carpeta de dist si no existe
 mkdir -p dist
 
-echo "=== Compilando Minecraft Downloader para múltiples plataformas ==="
+echo "=== Compilando LLauncher para múltiples plataformas ==="
 
 # Comprobar si docker está instalado
 if ! command -v docker &> /dev/null; then
