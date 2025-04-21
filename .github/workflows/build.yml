@@ -79,22 +79,26 @@ jobs:
           python-version: '3.9'
       - name: Install dependencies for both architectures
         run: |
+          # Crear entornos virtuales separados para cada arquitectura
+          python3 -m venv venv_arm64
+          python3 -m venv venv_x86_64
+          
           # Instalar para arm64
-          arch -arm64 python3 -m pip install --upgrade pip
-          arch -arm64 pip install pyinstaller
-          arch -arm64 pip install -r requirements.txt
+          arch -arm64 ./venv_arm64/bin/python -m pip install --upgrade pip
+          arch -arm64 ./venv_arm64/bin/pip install pyinstaller
+          arch -arm64 ./venv_arm64/bin/pip install -r requirements.txt
           
           # Instalar para x86_64
-          arch -x86_64 python3 -m pip install --upgrade pip
-          arch -x86_64 pip install pyinstaller
-          arch -x86_64 pip install -r requirements.txt
+          arch -x86_64 ./venv_x86_64/bin/python -m pip install --upgrade pip
+          arch -x86_64 ./venv_x86_64/bin/pip install pyinstaller
+          arch -x86_64 ./venv_x86_64/bin/pip install -r requirements.txt
       - name: Build Intel and ARM binaries
         run: |
           # Build x86_64
-          arch -x86_64 python3 -m PyInstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
+          arch -x86_64 ./venv_x86_64/bin/pyinstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
           
           # Build arm64
-          arch -arm64 python3 -m PyInstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
+          arch -arm64 ./venv_arm64/bin/pyinstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
           
           # Create universal binary
           mkdir -p dist/universal
