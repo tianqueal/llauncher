@@ -68,18 +68,36 @@ pip install -r requirements-dev.txt
 Una vez que las dependencias estén instaladas, puedes ejecutar el lanzador de Minecraft con el siguiente comando:
 
 ```bash
-python launcher.py
+python main.py
 ```
 
 ### Generar ejecutable
 
-Si quieres generar un archivo ejecutable para el lanzador, puedes usar PyInstaller. Esto creará un archivo ejecutable que puedes compartir sin necesidad de que los usuarios tengan Python instalado.
+Si quieres generar un archivo ejecutable para el lanzador, puedes usar PyInstaller con las siguientes opciones recomendadas:
 
 ```bash
-pyinstaller launcher.py
+# Para Linux/macOS
+pyinstaller --clean --onefile --name llauncher main.py
+
+# Para Windows
+pyinstaller --clean --onefile --name llauncher.exe main.py
 ```
 
-El ejecutable se generará en el directorio `dist/`.
+Estas opciones crearán un único archivo ejecutable (`--onefile`) que será más fácil de distribuir, y limpiará archivos temporales de compilaciones anteriores (`--clean`).
+
+Si necesitas compilar para plataformas específicas:
+
+```bash
+# Para macOS (binario universal)
+# Requiere macOS con chip Apple Silicon
+arch -arm64 pyinstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
+arch -x86_64 pyinstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
+lipo -create dist/x86_64/llauncher_macos_x64 dist/arm64/llauncher_macos_arm64 -output dist/universal/llauncher_macos_universal
+```
+
+También puedes usar el script `build_all.sh` incluido para generar ejecutables para todas las plataformas soportadas.
+
+Los ejecutables se generarán en el directorio `dist/`.
 
 ## Contribuciones
 

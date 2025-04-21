@@ -1,0 +1,28 @@
+FROM --platform=linux/arm64 python:3.9-slim
+
+# Instalar Wine y dependencias necesarias para cross-compilar para Windows ARM64
+RUN apt-get update && apt-get install -y \
+    wine \
+    wine-binfmt \
+    wget \
+    unzip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configurar Wine para ARM (Windows ARM64)
+ENV WINEARCH=win64
+ENV WINEDEBUG=-all
+
+# Instalar dependencias
+RUN pip install --no-cache-dir pyinstaller
+
+WORKDIR /app
+
+# Copiar solo los archivos necesarios para instalar dependencias
+COPY requirements.txt .
+
+# Instalar dependencias de Python
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Configurar PyInstaller para cross-compilación a Windows ARM64
+ENV PYTHONPATH=/app

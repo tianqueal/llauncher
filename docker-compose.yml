@@ -32,3 +32,13 @@ services:
       - ./:/app
       - ./dist:/app/dist
     command: ["pyinstaller", "--clean", "--onefile", "--name", "llauncher_win_x64", "main.py"]
+      
+  # Compilación para Windows ARM64
+  windows-arm:
+    build:
+      context: .
+      dockerfile: Dockerfile.windows-arm
+    volumes:
+      - ./:/app
+      - ./dist:/app/dist
+    command: ["pyinstaller", "--clean", "--onefile", "--name", "llauncher_win_arm64", "main.py"]
