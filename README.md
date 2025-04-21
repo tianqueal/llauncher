@@ -1,5 +1,7 @@
 # LLauncher
 
+<img width="500" alt="LLauncher image" src="https://github.com/user-attachments/assets/1606b5d3-0453-4802-b268-81d1a482d3a4" />
+
 Este proyecto es un lanzador personalizado para Minecraft. Permite gestionar y lanzar el juego de manera sencilla, todo dentro de un entorno controlado. Está diseñado para ser fácil de usar y personalizar, y está optimizado para el desarrollo de nuevas características y mejoras.
 
 ## Requisitos
