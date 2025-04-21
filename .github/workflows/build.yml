@@ -9,34 +9,47 @@ on:
 
 jobs:
   build-linux:
-    name: Build Linux binaries
+    name: Build Linux binaries (x86_64 and ARM64)
     runs-on: ubuntu-latest
     strategy:
       matrix:
         arch: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Python
+
+      - name: Set up Python (for x86_64)
+        if: matrix.arch == 'x86_64'
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
-      - name: Install dependencies
+          python-version: "3.9"
+
+      - name: Build x86_64 binary (native)
+        if: matrix.arch == 'x86_64'
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
-      - name: Install qemu for ARM (if needed)
+          pyinstaller --clean --onefile --name llauncher_linux_x64 main.py
+
+      - name: Set up Docker Buildx (for ARM64)
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build aarch64 binary (using ARM64 Docker container)
         if: matrix.arch == 'aarch64'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y qemu-user-static binfmt-support
-      - name: Build binary
-        run: |
-          if [ "${{ matrix.arch }}" == "x86_64" ]; then
-            pyinstaller --clean --onefile --name llauncher_linux_x64 main.py
-          else
-            pyinstaller --clean --onefile --name llauncher_linux_arm64 main.py
-          fi
+          docker run --rm --platform linux/arm64 \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            arm64v8/python:3.9 \
+            /bin/bash -c "
+              apt-get update && apt-get install -y python3-pip python3-dev build-essential
+              pip install --upgrade pip
+              pip install pyinstaller
+              pip install -r requirements.txt
+              pyinstaller --clean --onefile --name llauncher_linux_arm64 main.py
+            "
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -53,7 +66,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -76,18 +89,18 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: "3.9"
       - name: Install dependencies for both architectures
         run: |
           # Crear entornos virtuales separados para cada arquitectura
           python3 -m venv venv_arm64
           python3 -m venv venv_x86_64
-          
+
           # Instalar para arm64
           arch -arm64 ./venv_arm64/bin/python -m pip install --upgrade pip
           arch -arm64 ./venv_arm64/bin/pip install pyinstaller
           arch -arm64 ./venv_arm64/bin/pip install -r requirements.txt
-          
+
           # Instalar para x86_64
           arch -x86_64 ./venv_x86_64/bin/python -m pip install --upgrade pip
           arch -x86_64 ./venv_x86_64/bin/pip install pyinstaller
@@ -96,10 +109,10 @@ jobs:
         run: |
           # Build x86_64
           arch -x86_64 ./venv_x86_64/bin/pyinstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
-          
+
           # Build arm64
           arch -arm64 ./venv_arm64/bin/pyinstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
-          
+
           # Create universal binary
           mkdir -p dist/universal
           lipo -create dist/x86_64/llauncher_macos_x64 dist/arm64/llauncher_macos_arm64 -output dist/universal/llauncher_macos_universal
