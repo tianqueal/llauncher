@@ -77,17 +77,25 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - name: Install dependencies
+      - name: Install dependencies for both architectures
         run: |
-          python3 -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
+          # Instalar para arm64
+          arch -arm64 python3 -m pip install --upgrade pip
+          arch -arm64 pip install pyinstaller
+          arch -arm64 pip install -r requirements.txt
+          
+          # Instalar para x86_64
+          arch -x86_64 python3 -m pip install --upgrade pip
+          arch -x86_64 pip install pyinstaller
+          arch -x86_64 pip install -r requirements.txt
       - name: Build Intel and ARM binaries
         run: |
           # Build x86_64
-          arch -x86_64 pyinstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
+          arch -x86_64 python3 -m PyInstaller --clean --onefile --distpath dist/x86_64 --name llauncher_macos_x64 main.py
+          
           # Build arm64
-          arch -arm64 pyinstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
+          arch -arm64 python3 -m PyInstaller --clean --onefile --distpath dist/arm64 --name llauncher_macos_arm64 main.py
+          
           # Create universal binary
           mkdir -p dist/universal
           lipo -create dist/x86_64/llauncher_macos_x64 dist/arm64/llauncher_macos_arm64 -output dist/universal/llauncher_macos_universal
