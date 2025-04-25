@@ -221,15 +221,43 @@ def handle_config():
             settings.get("username", "Player"),
             "Nombre de usuario predeterminado",
         )
-        table.add_row("4", "Volver al menú principal", "", "")
+        table.add_row(
+            "4",
+            "Calidad gráfica",
+            settings.get("graphics_quality", "high"),
+            "Nivel de calidad gráfica (low, medium, high)",
+        )
+        table.add_row(
+            "5",
+            "Memoria para Minecraft",
+            f"{settings.get('memory_mb', 2048)} MB",
+            "Cantidad de RAM para Minecraft (512-8192 MB)",
+        )
+        table.add_row(
+            "6",
+            "Ruta de Java",
+            settings.get("java_path", "java"),
+            "Ruta al ejecutable de Java",
+        )
+        table.add_row("7", "Volver al menú principal", "", "")
 
         console.print(table)
+
+        # Importar la función para verificar Java (mostrando estado actual)
+        from src.launcher.game_launcher import is_java_available, find_java_path
+
+        java_path = find_java_path()
+        java_status = "Disponible ✅" if is_java_available() else "No disponible ❌"
+        console.print(
+            f"[cyan]Estado actual de Java: [{'green' if is_java_available() else 'red'}]{java_status}"
+        )
+        console.print(f"[cyan]Ruta actual: [yellow]{java_path}")
 
         # Solicitar la opción al usuario
         option = Prompt.ask(
             "Selecciona una opción para modificar",
-            choices=["1", "2", "3", "4"],
-            default="4",
+            choices=["1", "2", "3", "4", "5", "6", "7"],
+            default="7",
         )
 
         if option == "1":
@@ -279,16 +307,322 @@ def handle_config():
             settings["username"] = new_username
 
         elif option == "4":
+            # Modificar calidad gráfica
+            current = settings.get("graphics_quality", "high")
+            quality_options = ["low", "medium", "high"]
+
+            table = Table(title="Niveles de Calidad Gráfica")
+            table.add_column("Nivel", style="cyan")
+            table.add_column("Descripción", style="yellow")
+            table.add_column("Tamaño", style="green")
+
+            table.add_row(
+                "low",
+                "Texturas básicas, sin sonidos ambientales ni música",
+                "~40% menos de espacio",
+            )
+            table.add_row(
+                "medium",
+                "Casi todas las texturas, menos efectos avanzados",
+                "~20% menos de espacio",
+            )
+            table.add_row(
+                "high", "Todas las texturas, efectos y sonidos", "Instalación completa"
+            )
+
+            console.print(table)
+            console.print(
+                "[yellow]Nota: Cambiar esta configuración afectará a la próxima descarga."
+            )
+
+            new_quality = Prompt.ask(
+                "Selecciona el nivel de calidad gráfica",
+                choices=quality_options,
+                default=current,
+            )
+
+            settings["graphics_quality"] = new_quality
+
+        elif option == "5":
+            # Modificar memoria para Minecraft
+            current = settings.get("memory_mb", 2048)
+
+            # Detectar memoria disponible en el sistema
+            try:
+                import psutil
+
+                total_ram = psutil.virtual_memory().total // (1024 * 1024)  # En MB
+                max_suggested = min(
+                    8192, int(total_ram * 0.75)
+                )  # 75% del total o 8GB max
+
+                console.print(f"[cyan]Memoria RAM total detectada: {total_ram} MB")
+                console.print(f"[green]Recomendada: {max_suggested} MB (75% del total)")
+            except ImportError:
+                max_suggested = 4096
+                console.print(
+                    "[yellow]No se pudo detectar la memoria del sistema. psutil no está disponible."
+                )
+                console.print(
+                    "[yellow]Si necesitas asignar más memoria, instala psutil: pip install psutil"
+                )
+
+            while True:
+                try:
+                    value = int(
+                        Prompt.ask(
+                            f"Ingresa la cantidad de RAM para Minecraft (512-{max_suggested} MB)",
+                            default=str(current),
+                        )
+                    )
+                    if 512 <= value <= max_suggested:
+                        settings["memory_mb"] = value
+                        break
+                    else:
+                        console.print(
+                            f"[bold red]El valor debe estar entre 512 y {max_suggested} MB."
+                        )
+                except ValueError:
+                    console.print("[bold red]Por favor, ingresa un número válido.")
+
+        elif option == "6":
+            # Configurar ruta de Java
+            current = settings.get("java_path", "java")
+            console.print("[bold cyan]Configuración de Java[/bold cyan]")
+            console.print(
+                "[yellow]Deja el campo vacío para usar 'java' del PATH del sistema."
+            )
+
+            if current != "java":
+                console.print(f"[green]Ruta actual: {current}")
+            else:
+                console.print(
+                    f"[yellow]Actualmente usando 'java' del PATH del sistema."
+                )
+
+            # Mostrar sugerencias de rutas comunes para Java según el SO
+            import platform
+
+            system = platform.system().lower()
+
+            if system == "darwin":  # macOS
+                console.print("[bold cyan]Rutas típicas de Java en macOS:[/bold cyan]")
+                console.print(
+                    "  • [yellow]/opt/homebrew/opt/openjdk/bin/java[/yellow] (Homebrew en Apple Silicon)"
+                )
+                console.print(
+                    "  • [yellow]/usr/local/opt/openjdk/bin/java[/yellow] (Homebrew en Intel Mac)"
+                )
+                console.print(
+                    "  • [yellow]/Library/Java/JavaVirtualMachines/<version>/Contents/Home/bin/java[/yellow]"
+                )
+
+                # Intentar detectar instalaciones de Java con Homebrew
+                import subprocess
+
+                try:
+                    # Verificar Homebrew
+                    brew_paths = []
+                    brew_process = subprocess.run(
+                        ["brew", "--prefix", "openjdk"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if brew_process.returncode == 0:
+                        brew_path = brew_process.stdout.strip()
+                        if brew_path:
+                            java_path = f"{brew_path}/bin/java"
+                            from pathlib import Path
+
+                            if Path(java_path).exists():
+                                brew_paths.append(java_path)
+                                console.print(
+                                    f"[green]✓ Detectada instalación de Java con Homebrew: {java_path}"
+                                )
+
+                    if brew_paths:
+                        console.print(
+                            "[yellow]Puedes usar una de las rutas detectadas o ingresar otra manualmente."
+                        )
+                except:
+                    pass
+
+            elif system == "windows":
+                console.print(
+                    "[bold cyan]Rutas típicas de Java en Windows:[/bold cyan]"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\Java\\jre<version>\\bin\\java.exe[/yellow] (Oracle Java)"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\Java\\jdk<version>\\bin\\java.exe[/yellow] (Oracle JDK)"
+                )
+
+                # Añadir información específica para winget
+                console.print(
+                    "\n[bold cyan]Rutas típicas de instalaciones con winget:[/bold cyan]"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\Eclipse Adoptium\\jdk-<version>\\bin\\java.exe[/yellow] (Eclipse Temurin)"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\Microsoft\\jdk-<version>\\bin\\java.exe[/yellow] (Microsoft OpenJDK)"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\BellSoft\\LibericaJDK-<version>\\bin\\java.exe[/yellow] (Liberica JDK)"
+                )
+                console.print(
+                    "  • [yellow]C:\\Program Files\\Amazon Corretto\\<version>\\bin\\java.exe[/yellow] (Amazon Corretto)"
+                )
+
+                # Intentar detectar instalaciones típicas de winget
+                import subprocess
+
+                try:
+                    # Verificar si winget está disponible
+                    winget_process = subprocess.run(
+                        ["where", "winget"], capture_output=True, text=True, check=False
+                    )
+
+                    if winget_process.returncode == 0:
+                        console.print("[green]✓ Winget detectado en el sistema")
+
+                        # Intentar listar las instalaciones de Java mediante winget
+                        winget_list = subprocess.run(
+                            [
+                                "winget",
+                                "list",
+                                "--query",
+                                "java",
+                                "--accept-source-agreements",
+                            ],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+
+                        if (
+                            winget_list.returncode == 0
+                            and "adoptium" in winget_list.stdout.lower()
+                        ):
+                            console.print(
+                                "[green]✓ Detectada instalación de Java con winget (Eclipse Adoptium/Temurin)"
+                            )
+
+                        if (
+                            winget_list.returncode == 0
+                            and "microsoft" in winget_list.stdout.lower()
+                        ):
+                            console.print(
+                                "[green]✓ Detectada instalación de Java con winget (Microsoft OpenJDK)"
+                            )
+
+                        if (
+                            winget_list.returncode == 0
+                            and "corretto" in winget_list.stdout.lower()
+                        ):
+                            console.print(
+                                "[green]✓ Detectada instalación de Java con winget (Amazon Corretto)"
+                            )
+
+                        if (
+                            winget_list.returncode == 0
+                            and "liberica" in winget_list.stdout.lower()
+                            or "bellsoft" in winget_list.stdout.lower()
+                        ):
+                            console.print(
+                                "[green]✓ Detectada instalación de Java con winget (Liberica JDK)"
+                            )
+                except:
+                    pass  # No mostrar errores si winget no está disponible
+
+            elif system == "linux":
+                console.print("[bold cyan]Rutas típicas de Java en Linux:[/bold cyan]")
+                console.print("  • [yellow]/usr/bin/java[/yellow]")
+                console.print("  • [yellow]/usr/lib/jvm/<version>/bin/java[/yellow]")
+
+            # Solicitar la nueva ruta
+            new_path = Prompt.ask(
+                "Ingresa la ruta completa al ejecutable de Java", default=current
+            )
+
+            # Si el usuario ingresó algo, verificar que exista
+            if new_path and new_path != "java":
+                from pathlib import Path
+
+                java_exists = Path(new_path).exists()
+
+                if java_exists:
+                    settings["java_path"] = new_path
+                    console.print(f"[green]✓ Ruta configurada: {new_path}")
+
+                    # Verificar si es ejecutable
+                    try:
+                        from src.launcher.game_launcher import is_java_available
+
+                        old_path = settings["java_path"]
+                        settings["java_path"] = new_path
+                        set_setting(
+                            "java_path", new_path
+                        )  # Guardar temporalmente para probar
+
+                        if is_java_available():
+                            console.print("[green]✓ ¡Java verificado correctamente!")
+                        else:
+                            console.print(
+                                "[bold yellow]⚠️ La ruta existe pero Java no responde correctamente."
+                            )
+                            if Confirm.ask(
+                                "[yellow]¿Quieres usar esta ruta de todas formas?"
+                            ):
+                                console.print("[yellow]Se usará la ruta especificada.")
+                            else:
+                                settings["java_path"] = old_path
+                                set_setting("java_path", old_path)
+                                console.print("[yellow]Se mantendrá la ruta anterior.")
+                    except Exception as e:
+                        console.print(f"[bold red]Error al verificar Java: {e}")
+                else:
+                    if Confirm.ask(
+                        f"[bold yellow]⚠️ La ruta '{new_path}' no existe. ¿Deseas usarla de todas formas?"
+                    ):
+                        settings["java_path"] = new_path
+                        console.print(
+                            f"[yellow]Se usará la ruta especificada aunque no existe actualmente."
+                        )
+                    else:
+                        console.print("[yellow]Se mantendrá la ruta anterior.")
+            else:
+                # Si el usuario dejó vacío o "java", usar el valor predeterminado
+                settings["java_path"] = "java"
+                console.print("[green]✓ Se usará 'java' del PATH del sistema.")
+
+        elif option == "7":
             # Guardar los cambios y volver al menú principal
-            set_setting("max_workers", settings.get("max_workers", 10))
-            set_setting("logs_to_keep", settings.get("logs_to_keep", 20))
-            set_setting("username", settings.get("username", "Player"))
+            for key in [
+                "max_workers",
+                "logs_to_keep",
+                "username",
+                "graphics_quality",
+                "memory_mb",
+                "java_path",
+            ]:
+                if key in settings:
+                    set_setting(key, settings[key])
             console.print("[bold green]✅ Configuración guardada correctamente.")
             break
 
         # Guardar después de cada cambio
-        set_setting("max_workers", settings.get("max_workers", 10))
-        set_setting("logs_to_keep", settings.get("logs_to_keep", 20))
-        set_setting("username", settings.get("username", "Player"))
+        for key in [
+            "max_workers",
+            "logs_to_keep",
+            "username",
+            "graphics_quality",
+            "memory_mb",
+            "java_path",
+        ]:
+            if key in settings:
+                set_setting(key, settings[key])
 
     input("\nPresiona Enter para continuar...")

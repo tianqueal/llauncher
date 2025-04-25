@@ -3,7 +3,9 @@ import json
 import threading
 import time
 import zipfile
-import shutil  # Para obtener el ancho de la terminal
+import shutil
+import hashlib  # Para verificación de integridad
+import platform
 
 import requests
 
@@ -30,18 +32,41 @@ should_exit = False
 download_counter = 0
 download_lock = threading.Lock()
 total_downloads = 0
-current_file = ""  # Archivo actualmente en descarga
-current_file_lock = threading.Lock()  # Lock para actualizar el archivo actual
+current_file = ""
+current_file_lock = threading.Lock()
+
+# Añadir un nuevo lock para proteger la extracción de natives
+extract_lock = threading.Lock()
 
 
-def download_file(url, dest):
-    """Descargar un archivo desde una URL"""
+def download_file(url, dest, expected_hash=None):
+    """Descargar un archivo desde una URL con verificación de integridad opcional"""
+    # Declarar todas las variables globales al inicio de la función
+    global current_file
+    global download_counter
+
     try:
         # Actualizar el archivo actual que se está descargando
-        global current_file
         with current_file_lock:
             current_file = dest.name
 
+        # Si el archivo ya existe y tiene el hash esperado, omitir descarga
+        if expected_hash and dest.exists():
+            if verify_file_hash(dest, expected_hash):
+                # Solo registrar en el archivo de log, no en la consola
+                log(
+                    f"Omitiendo descarga de {dest.name} (ya existe y es válido)",
+                    console_output=False,
+                )
+
+                # Actualizar contador global de descargas
+                with download_lock:
+                    download_counter += 1
+                    current = download_counter
+
+                return True
+
+        # Realizar la descarga
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
@@ -53,20 +78,32 @@ def download_file(url, dest):
 
         # Descargar el archivo
         downloaded = 0
+        sha1_hash = hashlib.sha1()
+
         with open(dest, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+                    if expected_hash:
+                        sha1_hash.update(chunk)
                     downloaded += len(chunk)
 
+        # Verificar hash si se especificó
+        if expected_hash and expected_hash != sha1_hash.hexdigest():
+            log(
+                f"Error de verificación para {dest.name} (hash no coincide)", error=True
+            )
+            return False
+
         # Actualizar contador global de descargas
-        global download_counter
         with download_lock:
             download_counter += 1
             current = download_counter
 
+        # Solo registrar en el archivo de log, no en la consola
         log(
-            f"Descargado {dest.name} [{current}/{total_downloads if total_downloads > 0 else '?'}]"
+            f"Descargado {dest.name} [{current}/{total_downloads if total_downloads > 0 else '?'}]",
+            console_output=False,
         )
         return True
     except requests.RequestException as e:
@@ -74,31 +111,61 @@ def download_file(url, dest):
         return False
 
 
-def extract_natives(jar_path):
-    """Extrae el contenido de un JAR de natives"""
+def verify_file_hash(file_path, expected_hash):
+    """Verifica el hash SHA1 de un archivo"""
     try:
-        with zipfile.ZipFile(jar_path, "r") as jar:
-            for file in jar.namelist():
-                if file.startswith("META-INF/"):
-                    continue
-                jar.extract(file, NATIVES_DIR)
-        log(f"Extraído {jar_path.name} en {NATIVES_DIR}")
-        return True
-    except zipfile.BadZipFile:
-        log(f"Error: {jar_path} no es un archivo ZIP válido.", error=True)
+        sha1_hash = hashlib.sha1()
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                sha1_hash.update(chunk)
+
+        return sha1_hash.hexdigest() == expected_hash
+    except Exception as e:
+        log(f"Error al verificar hash de {file_path}: {e}", error=True)
         return False
 
 
+def extract_natives(jar_path):
+    """Extrae el contenido de un JAR de natives"""
+    # Usar lock para evitar extracciones concurrentes que podrían interferir entre sí
+    with extract_lock:
+        try:
+            with zipfile.ZipFile(jar_path, "r") as jar:
+                for file in jar.namelist():
+                    if file.startswith("META-INF/"):
+                        continue
+                    jar.extract(file, NATIVES_DIR)
+            log(f"Extraído {jar_path.name} en {NATIVES_DIR}")
+            return True
+        except zipfile.BadZipFile:
+            log(f"Error: {jar_path} no es un archivo ZIP válido.", error=True)
+            return False
+        except PermissionError:
+            log(f"Error de permisos al extraer {jar_path}", error=True)
+            return False
+        except Exception as e:
+            log(
+                f"Error inesperado al extraer {jar_path}: {e.__class__.__name__}: {e}",
+                error=True,
+            )
+            return False
+
+
 def show_progress_animation():
-    """Muestra una animación de progreso en la terminal con una barra visual"""
+    """Muestra una animación de progreso en la terminal con una barra visual mejorada"""
     animation = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # Spinner más estético
     idx = 0
+    last_percent = -1
+    last_file_displayed = ""
+    update_counter = 0
+
     try:
         terminal_width = shutil.get_terminal_size().columns
     except:
-        terminal_width = (
-            80  # Valor por defecto si no podemos obtener el ancho de la terminal
-        )
+        terminal_width = 80  # Valor por defecto
+
+    # Mostrar cabecera inicial
+    print("\n📥 Progreso de descarga:")
 
     while not should_exit:
         with download_lock:
@@ -111,45 +178,68 @@ def show_progress_animation():
         if total > 0:
             percent = min(int(current * 100 / total), 100)
 
-            # Calcular cuánto espacio tenemos para la barra de progreso
-            info_text = f" {percent}% [{current}/{total}] "
-            spinner = animation[idx % len(animation)]
-            file_text = f" {file_name}"
+            # Evitar actualizaciones excesivas de la consola
+            # Solo actualizar si:
+            # 1. El porcentaje ha cambiado
+            # 2. El archivo ha cambiado
+            # 3. Han pasado 10 ciclos (para mantener el spinner animado)
+            if (
+                percent != last_percent
+                or file_name != last_file_displayed
+                or update_counter >= 10
+            ):
+                update_counter = 0
+                last_percent = percent
+                last_file_displayed = file_name
 
-            # Espacio disponible para la barra después de mostrar toda la información
-            available_width = max(
-                10, terminal_width - len(info_text) - len(file_text) - 4
-            )
+                # Calcular espacio para la barra de progreso
+                spinner = animation[idx % len(animation)]
+                info_text = f" {percent}% [{current}/{total}] "
 
-            # Calcular la longitud de la barra de progreso
-            bar_length = available_width
-            filled_length = int(bar_length * percent // 100)
+                # Espacio disponible para la barra después de mostrar la información
+                available_width = max(20, terminal_width - len(info_text) - 6)
 
-            # Crear la barra de progreso
-            bar = "█" * filled_length + "░" * (bar_length - filled_length)
+                # Calcular la longitud de la barra de progreso (75% del espacio disponible)
+                bar_length = int(available_width * 0.75)
+                filled_length = int(bar_length * percent // 100)
 
-            # Limitar la longitud del nombre del archivo si es necesario
-            max_file_length = terminal_width - len(info_text) - len(bar) - 5
-            if len(file_name) > max_file_length:
-                file_display = file_name[: max_file_length - 3] + "..."
+                # Crear la barra de progreso con colores
+                bar = "█" * filled_length + "░" * (bar_length - filled_length)
+
+                # Mostrar información del archivo actual en una segunda línea
+                # pero solo mostrar el nombre del archivo (sin la ruta)
+                file_display = (
+                    file_name.split("/")[-1] if "/" in file_name else file_name
+                )
+
+                # Limitar longitud del nombre del archivo
+                max_file_length = terminal_width - 20
+                if len(file_display) > max_file_length:
+                    file_display = file_display[: max_file_length - 3] + "..."
+
+                # Limpiar líneas anteriores y mostrar la barra de progreso
+                print(f"\r{spinner} [{bar}]{info_text}", end="")
+                print(f"\n📄 Archivo actual: {file_display}", end="\r\033[A")
             else:
-                file_display = file_name
-
-            # Mostrar la barra de progreso con toda la información
-            print(f"\r{spinner} [{bar}]{info_text}| {file_display}", end="")
+                update_counter += 1
         else:
             # Si no conocemos el total, mostrar solo el spinner
-            print(
-                f"\r{animation[idx % len(animation)]} Descargando... {file_name}",
-                end="",
-            )
+            spinner = animation[idx % len(animation)]
+            print(f"\r{spinner} Preparando descarga...", end="")
+
+            # Mostrar el archivo actual si hay uno
+            if file_name:
+                file_display = (
+                    file_name.split("/")[-1] if "/" in file_name else file_name
+                )
+                print(f"\n📄 {file_display}", end="\r\033[A")
 
         idx += 1
         time.sleep(0.1)
 
 
 def download_minecraft():
-    """Descarga Minecraft y sus dependencias usando descargas paralelas"""
+    """Descarga Minecraft y sus dependencias usando descargas paralelas con verificación de integridad"""
     global download_complete, download_in_progress, should_exit, progress_thread
     global download_counter, total_downloads
 
@@ -171,7 +261,11 @@ def download_minecraft():
 
         # Obtener el número máximo de workers desde la configuración
         max_workers = get_setting("max_workers", 10)
-        log(f"Usando {max_workers} workers para descargas paralelas")
+        # Obtener el nivel de calidad gráfica (afecta a qué assets se descargan)
+        graphics_quality = get_setting(
+            "graphics_quality", "high"
+        )  # valores: low, medium, high
+        log(f"Usando {max_workers} workers y calidad gráfica: {graphics_quality}")
 
         # Crear carpetas
         BASE_DIR.mkdir(exist_ok=True)
@@ -200,10 +294,13 @@ def download_minecraft():
             log(f"Error al leer el manifest: {e}", error=True)
             return
 
-        # Descargar client.jar
-        client_url = manifest["downloads"]["client"]["url"]
+        # Descargar client.jar con verificación de hash
+        client_info = manifest["downloads"]["client"]
+        client_url = client_info["url"]
+        client_sha1 = client_info["sha1"]
+
         log("Descargando client.jar...")
-        if not download_file(client_url, CLIENT_JAR):
+        if not download_file(client_url, CLIENT_JAR, client_sha1):
             should_exit = True
             log("Error al descargar client.jar", error=True)
             return
@@ -215,7 +312,44 @@ def download_minecraft():
 
         # Recopilar las librerías a descargar
         libraries = manifest.get("libraries", [])
+
+        # Definir mapeo de sistemas operativos para filtrado
+        os_mapping = {
+            "windows": ["windows", "win"],
+            "linux": ["linux", "unix"],
+            "darwin": ["osx", "mac", "macos", "darwin"],
+        }
+
+        current_os_aliases = os_mapping.get(OS_NAME, [OS_NAME])
+        log(f"Filtrando bibliotecas para: {current_os_aliases}")
+
         for lib in libraries:
+            # Verificar reglas de inclusión/exclusión
+            should_include = True
+            if "rules" in lib:
+                should_include = False  # Default para bibliotecas con reglas
+                for rule in lib.get("rules", []):
+                    action = rule.get("action", "allow") == "allow"
+
+                    # Verificar regla específica de SO
+                    if "os" in rule:
+                        os_rule = rule["os"]
+                        os_name = os_rule.get("name", "").lower()
+
+                        # Comprobar si la regla aplica al SO actual
+                        if any(alias == os_name for alias in current_os_aliases):
+                            should_include = action
+                            break
+                    else:
+                        # Regla general
+                        should_include = action
+
+            # Si la biblioteca debe excluirse, saltarla
+            if not should_include:
+                lib_name = lib.get("name", "Desconocida")
+                log(f"Omitiendo biblioteca no requerida: {lib_name}")
+                continue
+
             downloads = lib.get("downloads", {})
 
             # Librería normal
@@ -223,8 +357,10 @@ def download_minecraft():
                 artifact = downloads["artifact"]
                 url = artifact["url"]
                 path = LIBRARIES_DIR / artifact["path"]
-                if not path.exists():
-                    download_tasks.append((url, path))
+                # Incluir el SHA1 para verificación
+                sha1 = artifact.get("sha1")
+                if not path.exists() or (sha1 and not verify_file_hash(path, sha1)):
+                    download_tasks.append((url, path, sha1))
 
             # Librería native (si aplica)
             classifiers = downloads.get("classifiers", {})
@@ -236,12 +372,17 @@ def download_minecraft():
             elif OS_NAME == "darwin":
                 native_key = "natives-osx"
 
+            # Solo descargar natives para el SO actual
             if native_key and native_key in classifiers:
                 native = classifiers[native_key]
                 url = native["url"]
                 path = LIBRARIES_DIR / native["path"]
-                if not path.exists():
-                    download_tasks.append((url, path))
+                sha1 = native.get("sha1")
+                if not path.exists() or (sha1 and not verify_file_hash(path, sha1)):
+                    download_tasks.append((url, path, sha1))
+                    # Marcar esta biblioteca para extracción posterior
+                    log(f"Marcada para extracción: {path.name}")
+            # IMPORTANTE: No descargar ni siquiera las natives para otros sistemas
 
         # Preparar la descarga de assets
         log("Preparando descarga de assets...")
@@ -251,7 +392,8 @@ def download_minecraft():
         asset_index_path = ASSETS_DIR / "indexes" / f"{asset_index_id}.json"
 
         # Descargar el índice de assets primero (no en paralelo)
-        if not download_file(asset_index_url, asset_index_path):
+        asset_index_sha1 = asset_index.get("sha1")
+        if not download_file(asset_index_url, asset_index_path, asset_index_sha1):
             should_exit = True
             log("Error al descargar el índice de assets", error=True)
             return
@@ -265,18 +407,115 @@ def download_minecraft():
             log(f"Error al leer el asset index: {e}", error=True)
             return
 
-        # Recopilar assets a descargar
+        # Recopilar assets a descargar (filtrados por calidad gráfica)
         objects = asset_manifest.get("objects", {})
-        for asset_name, asset_info in objects.items():
-            hash_value = asset_info["hash"]
-            subdir = hash_value[:2]
-            asset_url = (
-                f"https://resources.download.minecraft.net/{subdir}/{hash_value}"
-            )
-            asset_path = ASSETS_DIR / "objects" / subdir / hash_value
 
-            if not asset_path.exists():
-                download_tasks.append((asset_url, asset_path))
+        # Definir categorías de assets y filtros según calidad gráfica
+        asset_categories = {
+            "textures": ["textures/", ".png", ".jpg", ".jpeg", ".tga"],
+            "sounds": ["sounds/", ".ogg", ".mp3", ".wav"],
+            "music": ["music/", "records/", "sounds/music/", "sounds/records/"],
+            "languages": ["lang/", "texts/", "realms/lang/"],
+            "fonts": ["font/", "fonts/", "unicode/"],
+            "models": ["models/", ".json"],
+        }
+
+        # Configuración de filtrado según calidad
+        quality_filters = {
+            "low": {
+                "textures": lambda name: not any(
+                    x in name.lower()
+                    for x in ["hd", "4k", "high", "normal", "rain", "detailed"]
+                ),
+                "sounds": lambda name: not any(
+                    x in name.lower()
+                    for x in ["ambience", "ambient", "environment", "weather"]
+                ),
+                "music": lambda _: False,  # Sin música en calidad baja
+                "languages": lambda name: "en_us" in name.lower()
+                or "es_" in name.lower(),  # Solo inglés y español
+                "fonts": lambda _: True,  # Siempre descargar fuentes
+                "models": lambda name: "item" in name.lower()
+                or "block" in name.lower(),  # Solo modelos esenciales
+                "misc": lambda _: True,  # Otros assets esenciales
+            },
+            "medium": {
+                "textures": lambda name: not any(
+                    x in name.lower() for x in ["4k", "ultra", "parallax"]
+                ),
+                "sounds": lambda name: not "ambient/"
+                in name.lower(),  # Algunos sonidos ambientales
+                "music": lambda name: "menu" in name.lower()
+                or "game" in name.lower(),  # Música básica
+                "languages": lambda _: True,  # Todos los idiomas
+                "fonts": lambda _: True,
+                "models": lambda _: True,
+                "misc": lambda _: True,
+            },
+            "high": {
+                "textures": lambda _: True,
+                "sounds": lambda _: True,
+                "music": lambda _: True,
+                "languages": lambda _: True,
+                "fonts": lambda _: True,
+                "models": lambda _: True,
+                "misc": lambda _: True,
+            },
+        }
+
+        # Función para determinar la categoría de un asset
+        def get_asset_category(asset_name):
+            for category, markers in asset_categories.items():
+                if any(marker in asset_name.lower() for marker in markers):
+                    return category
+            return "misc"
+
+        # Contadores para estadísticas
+        skipped_assets = 0
+        downloaded_assets = 0
+        categories_stats = {
+            category: {"total": 0, "skipped": 0} for category in asset_categories.keys()
+        }
+        categories_stats["misc"] = {"total": 0, "skipped": 0}
+
+        # Procesar cada asset
+        for asset_name, asset_info in objects.items():
+            # Categorizar el asset
+            category = get_asset_category(asset_name)
+            categories_stats[category]["total"] += 1
+
+            # Determinar si debe descargarse según la configuración de calidad
+            filter_func = quality_filters[graphics_quality][category]
+            should_download = filter_func(asset_name)
+
+            if should_download:
+                hash_value = asset_info["hash"]
+                subdir = hash_value[:2]
+                asset_url = (
+                    f"https://resources.download.minecraft.net/{subdir}/{hash_value}"
+                )
+                asset_path = ASSETS_DIR / "objects" / subdir / hash_value
+
+                if not asset_path.exists() or not verify_file_hash(
+                    asset_path, hash_value
+                ):
+                    download_tasks.append((asset_url, asset_path, hash_value))
+                    downloaded_assets += 1
+            else:
+                skipped_assets += 1
+                categories_stats[category]["skipped"] += 1
+                log(f"Omitiendo asset [{category}]: {asset_name}")
+
+        # Mostrar estadísticas de filtrado
+        log(f"Assets para descargar: {downloaded_assets}, Omitidos: {skipped_assets}")
+        for category, stats in categories_stats.items():
+            if stats["total"] > 0:
+                percentage = (stats["skipped"] / stats["total"]) * 100
+                log(
+                    f"  {category}: {stats['skipped']}/{stats['total']} omitidos ({percentage:.1f}%)"
+                )
+
+        log(f"Estimación de ahorro de espacio: ~{skipped_assets * 15 / 1024:.1f} MB")
 
         # Actualizar contador total de descargas
         total_downloads = len(download_tasks)
@@ -289,8 +528,8 @@ def download_minecraft():
             ) as executor:
                 # Crear un diccionario para almacenar los futures y sus paths correspondientes
                 future_to_path = {
-                    executor.submit(download_file, url, path): path
-                    for url, path in download_tasks
+                    executor.submit(download_file, url, path, sha1): path
+                    for url, path, sha1 in download_tasks
                 }
 
                 # Procesar los resultados a medida que se completan
@@ -299,13 +538,80 @@ def download_minecraft():
                     try:
                         success = future.result()
 
-                        # Si es un archivo nativo, extraerlo
-                        if (
-                            success
-                            and str(path).endswith(".jar")
-                            and "-natives-" in str(path)
-                        ):
-                            extract_natives(path)
+                        # Si es un archivo nativo, verificar que corresponda al SO actual antes de extraerlo
+                        if success and str(path).endswith(".jar"):
+                            # Determinar a qué SO corresponde esta native
+                            native_so_markers = {
+                                "windows": [
+                                    "natives-windows",
+                                    "natives-windows-x86",
+                                    "natives-windows-arm64",
+                                ],
+                                "linux": ["natives-linux"],
+                                "darwin": [
+                                    "natives-osx",
+                                    "natives-macos",
+                                    "natives-macos-arm64",
+                                    "natives-macos-patch",
+                                ],
+                                "macos": [
+                                    "natives-osx",
+                                    "natives-macos",
+                                    "natives-macos-arm64",
+                                    "natives-macos-patch",
+                                ],
+                                "macosx": [
+                                    "natives-osx",
+                                    "natives-macos",
+                                    "natives-macos-arm64",
+                                    "natives-macos-patch",
+                                ],
+                            }
+
+                            # Extracción selectiva de natives según el SO
+                            path_str = str(path).lower()
+                            current_os_markers = native_so_markers.get(OS_NAME, [])
+
+                            # Verificar si alguno de los marcadores del SO actual está en la ruta
+                            is_compatible = any(
+                                marker in path_str for marker in current_os_markers
+                            )
+
+                            # En macOS ARM, priorizar natives-macos-arm64 sobre natives-macos
+                            if (
+                                OS_NAME in ["darwin", "macos", "macosx"]
+                                and platform.machine() == "arm64"
+                            ):
+                                if "natives-macos-arm64" in path_str:
+                                    is_compatible = True
+                                    log(
+                                        f"Extrayendo native ARM64 para {OS_NAME}: {path.name}"
+                                    )
+                                    extract_natives(path)
+                                elif any(
+                                    marker in path_str
+                                    for marker in [
+                                        "natives-macos",
+                                        "natives-osx",
+                                        "natives-macos-patch",
+                                    ]
+                                ):
+                                    # En ARM64, también extraemos versiones normales de macOS para compatibilidad
+                                    is_compatible = True
+                                    log(
+                                        f"Extrayendo native compatible para {OS_NAME} ARM64: {path.name}"
+                                    )
+                                    extract_natives(path)
+                            # Para el resto de configuraciones, usar el marcador estándar
+                            elif is_compatible:
+                                log(f"Extrayendo native para {OS_NAME}: {path.name}")
+                                extract_natives(path)
+                            elif "-natives-" in path_str:
+                                # Es una native pero de otro SO, no la extraemos
+                                log(
+                                    f"Omitiendo extracción de native no compatible: {path.name}"
+                                )
+
                     except Exception as e:
                         log(f"Error al procesar {path}: {e}", error=True)
 

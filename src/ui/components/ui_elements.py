@@ -61,6 +61,16 @@ def create_status_panel():
         else "[bold red]✗ No instalado"
     )
 
+    # Verificar si Java está disponible
+    from src.launcher.game_launcher import is_java_available, find_java_path
+
+    java_available = is_java_available()
+    java_path = find_java_path()
+    if java_available:
+        java_status = f"[bold green]✓ Disponible"
+    else:
+        java_status = f"[bold red]✗ No disponible"
+
     # Obtener info del sistema
     system_info = platform.system()
     cpu_info = platform.processor() or "Desconocido"
@@ -71,14 +81,19 @@ def create_status_panel():
 
         ram_percent = psutil.virtual_memory().percent
         ram_info = f"[{'green' if ram_percent < 70 else 'yellow' if ram_percent < 90 else 'red'}]{ram_percent}%"
-    except:
-        ram_info = "N/A"
+    except ImportError:
+        ram_info = "[yellow]psutil no disponible"
+    except Exception:
+        ram_info = "[red]Error al obtener RAM"
 
     # Crear tabla
     table.add_column("Propiedad", style="bright_cyan")
     table.add_column("Valor")
 
     table.add_row("Estado Minecraft", minecraft_status)
+    table.add_row("Java", java_status)
+    if not java_available:
+        table.add_row("", "[bold yellow]⚠️ Configura Java en Opciones")
     table.add_row("Sistema", f"[cyan]{system_info}")
     table.add_row(
         "CPU", f"[cyan]{cpu_info[:40]+'...' if len(cpu_info) > 40 else cpu_info}"
